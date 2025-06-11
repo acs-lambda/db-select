@@ -2,11 +2,23 @@ import os
 import json
 import boto3
 import logging
+from decimal import Decimal
 from boto3.dynamodb.conditions import Key
 
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
+# Helper function to safely serialize objects with Decimal types
+def safe_json_dumps(obj):
+    return json.dumps(obj, cls=DecimalEncoder)
 
 # reuse clients
 dynamodb      = boto3.resource('dynamodb')
@@ -39,10 +51,10 @@ def fetch_cors_headers():
 
 def lambda_handler(event, context):
     logger.info("Lambda function started")
-    logger.debug(f"Received event: {json.dumps(event)}")
+    logger.debug(f"Received event: {safe_json_dumps(event)}")
     
     cors_headers = fetch_cors_headers()
-    logger.debug(f"CORS headers: {json.dumps(cors_headers)}")
+    logger.debug(f"CORS headers: {safe_json_dumps(cors_headers)}")
 
     # CORS preflight
     if event.get('httpMethod') == 'OPTIONS':
@@ -64,13 +76,13 @@ def lambda_handler(event, context):
             return {
                 'statusCode': 400,
                 'headers': cors_headers,
-                'body': json.dumps({'error': 'Invalid JSON in body'})
+                'body': safe_json_dumps({'error': 'Invalid JSON in body'})
             }
     else:
         logger.info("No body found, using event as payload")
         payload = event
     
-    logger.debug(f"Processed payload: {json.dumps(payload)}")
+    logger.debug(f"Processed payload: {safe_json_dumps(payload)}")
 
     # Validate required parameters
     table_name = payload.get('table_name')
@@ -91,7 +103,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 400,
             'headers': cors_headers,
-            'body': json.dumps({
+            'body': safe_json_dumps({
                 'error': 'Missing one of table_name, index_name, key_name, or key_value'
             })
         }
@@ -106,12 +118,12 @@ def lambda_handler(event, context):
         )
         items = response.get('Items', [])
         logger.info(f"Query successful. Retrieved {len(items)} items")
-        logger.debug(f"Query response: {json.dumps(items)}")
+        logger.debug(f"Query response: {safe_json_dumps(items)}")
         
         return {
             'statusCode': 200,
             'headers': cors_headers,
-            'body': json.dumps(items)
+            'body': safe_json_dumps(items)
         }
 
     except Exception as e:
@@ -119,7 +131,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 500,
             'headers': cors_headers,
-            'body': json.dumps({'error': str(e)})
+            'body': safe_json_dumps({'error': str(e)})
         }
     finally:
         logger.info("Lambda function execution completed")
