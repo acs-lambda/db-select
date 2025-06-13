@@ -127,29 +127,6 @@ def lambda_handler(event, context):
             'headers': cors_headers
         }
 
-    # Get account ID from the request
-    account_id = event.get('requestContext', {}).get('authorizer', {}).get('claims', {}).get('sub')
-    if not account_id:
-        logger.error("No account ID found in request")
-        return {
-            'statusCode': 401,
-            'headers': cors_headers,
-            'body': safe_json_dumps({'error': 'Unauthorized - No account ID'})
-        }
-
-    # Check rate limit
-    is_rate_limited, current_invocations, rate_limit = check_rate_limit(account_id)
-    if is_rate_limited:
-        logger.warning(f"Rate limit exceeded for account {account_id}. Current: {current_invocations}, Limit: {rate_limit}")
-        return {
-            'statusCode': 429,
-            'headers': cors_headers,
-            'body': safe_json_dumps({
-                'error': 'Rate limit exceeded',
-                'message': f'You have exceeded your AWS API rate limit of {rate_limit} requests per minute. Please try again later.'
-            })
-        }
-
     # parse body (API Gateway proxy vs direct invoke)
     body = event.get('body')
     if body:
@@ -175,6 +152,28 @@ def lambda_handler(event, context):
     index_name = payload.get('index_name')
     key_name   = payload.get('key_name')
     key_value  = payload.get('key_value')
+    # Get account ID from the request
+    account_id = payload.get('account_id')
+    if not account_id:
+        logger.error("No account ID found in request")
+        return {
+            'statusCode': 401,
+            'headers': cors_headers,
+            'body': safe_json_dumps({'error': 'Unauthorized - No account ID'})
+        }
+
+    # Check rate limit
+    is_rate_limited, current_invocations, rate_limit = check_rate_limit(account_id)
+    if is_rate_limited:
+        logger.warning(f"Rate limit exceeded for account {account_id}. Current: {current_invocations}, Limit: {rate_limit}")
+        return {
+            'statusCode': 429,
+            'headers': cors_headers,
+            'body': safe_json_dumps({
+                'error': 'Rate limit exceeded',
+                'message': f'You have exceeded your AWS API rate limit of {rate_limit} requests per minute. Please try again later.'
+            })
+        }
     
     logger.info(f"Validating parameters - Table: {table_name}, Index: {index_name}, Key: {key_name}")
     
