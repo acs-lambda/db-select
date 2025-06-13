@@ -92,8 +92,8 @@ def update_rate_limit(account_id):
     """
     try:
         rl_table = dynamodb.Table('RL_AWS')
-        current_time = int(time.time() * 1000)  # Current time in milliseconds
-        ttl_time = current_time + (60 * 1000)  # 1 minute from now
+        current_time = int(time.time())  # Current time in seconds
+        ttl_time = current_time + 60  # 1 minute from now
         
         # Try to update existing record
         try:
