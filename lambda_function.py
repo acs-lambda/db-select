@@ -99,10 +99,13 @@ def update_rate_limit(account_id):
         try:
             response = rl_table.update_item(
                 Key={'associated_account': account_id},
-                UpdateExpression='SET invocations = invocations + :inc, ttl = :ttl',
+                UpdateExpression='SET invocations = invocations + :inc, #ttl = :ttl',
                 ExpressionAttributeValues={
                     ':inc': 1,
                     ':ttl': ttl_time
+                },
+                ExpressionAttributeNames={
+                    '#ttl': 'ttl'
                 },
                 ReturnValues='UPDATED_NEW'
             )
