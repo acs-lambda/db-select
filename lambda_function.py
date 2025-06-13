@@ -59,7 +59,7 @@ def check_rate_limit(account_id):
         # First check the user's rate limit from Users table
         users_table = dynamodb.Table('Users')
         user_response = users_table.get_item(
-            Key={'account_id': account_id}
+            Key={'id': account_id}
         )
         user_item = user_response.get('Item')
         
