@@ -109,8 +109,10 @@ def update_rate_limit(account_id):
                 },
                 ReturnValues='UPDATED_NEW'
             )
-        except rl_table.meta.client.exceptions.ResourceNotFoundException:
-            # Create new record if doesn't exist
+        except (rl_table.meta.client.exceptions.ResourceNotFoundException,
+                rl_table.meta.client.exceptions.ValidationException) as e:
+            # Create new record if doesn't exist or if item is invalid
+            logger.info(f"Creating new rate limit record for account {account_id} due to: {str(e)}")
             rl_table.put_item(
                 Item={
                     'associated_account': account_id,
