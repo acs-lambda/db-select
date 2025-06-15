@@ -214,15 +214,24 @@ def lambda_handler(event, context):
     logger.info(f"Querying DynamoDB table {table_name} using index {index_name}")
     table = dynamodb.Table(table_name)
     try:
-        logger.debug(f"Executing query with key condition: {key_name} = {key_value}")
-        response = table.query(
-            IndexName=index_name,
-            KeyConditionExpression=Key(key_name).eq(key_value),
-            FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
-            ExpressionAttributeValues={
-                ':account_id': account_id
-            }
-        )
+        # Check if associated_account is part of the index name (indicating it's a GSI)
+        if 'associated_account' in index_name.lower():
+            logger.debug(f"Using associated_account as partition key in KeyConditionExpression")
+            response = table.query(
+                IndexName=index_name,
+                KeyConditionExpression=Key('associated_account').eq(account_id) & Key(key_name).eq(key_value)
+            )
+        else:
+            logger.debug(f"Using associated_account in FilterExpression")
+            response = table.query(
+                IndexName=index_name,
+                KeyConditionExpression=Key(key_name).eq(key_value),
+                FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
+                ExpressionAttributeValues={
+                    ':account_id': account_id
+                }
+            )
+            
         items = response.get('Items', [])
         logger.info(f"Query successful. Retrieved {len(items)} items")
         logger.debug(f"Query response: {safe_json_dumps(items)}")
