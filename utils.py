@@ -63,7 +63,7 @@ def invoke(function_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def parse_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Parse an event from either API Gateway or direct Lambda invocation
+    Parse an event from either API Gateway or direct Lambda invocation by invoking the parse-event Lambda function
     
     Args:
         event (Dict[str, Any]): The event to parse, either from API Gateway or direct Lambda
@@ -71,49 +71,20 @@ def parse_event(event: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Parsed event data including body and cookies if present
         
-    Example API Gateway event:
-    {
-        "body": "{\"key\": \"value\"}",
-        "headers": {
-            "Cookie": "session=abc123"
-        }
-    }
-    
-    Example direct Lambda event:
-    {
-        "key": "value",
-        "session": "abc123"
-    }
+    Raises:
+        ClientError: If Lambda invocation fails
+        Exception: If parsing fails
     """
     try:
-        parsed_data = {}
+        # Invoke the parse-event Lambda function
+        response = invoke('ParseEvent', event)
         
-        # Check if this is an API Gateway event
-        if 'body' in event:
-            # Parse the body if it's a string
-            if isinstance(event['body'], str):
-                try:
-                    parsed_data.update(json.loads(event['body']))
-                except json.JSONDecodeError:
-                    # If body is not JSON, use it as is
-                    parsed_data['body'] = event['body']
-            else:
-                parsed_data.update(event['body'])
-                
-            # Handle cookies from API Gateway
-            if 'headers' in event and 'Cookie' in event['headers']:
-                cookies = event['headers']['Cookie']
-                # Parse cookies into a dictionary
-                cookie_dict = dict(
-                    cookie.split('=', 1) for cookie in cookies.split('; ')
-                )
-                parsed_data.update(cookie_dict)
-                
-        else:
-            # Direct Lambda invocation - use event as is
-            parsed_data.update(event)
+        # Check if the parsing was successful
+        if response['statusCode'] != 200:
+            logger.error(f"Failed to parse event: {response['body']}")
+            raise Exception(f"Failed to parse event: {response['body'].get('message', 'Unknown error')}")
             
-        return parsed_data
+        return response['body']
         
     except Exception as e:
         logger.error(f"Error parsing event: {str(e)}")
@@ -121,7 +92,7 @@ def parse_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
 def authorize(user_id: str, session_id: str) -> None:
     """
-    Authorize a user by validating their session
+    Authorize a user by invoking the authorize Lambda function
     
     Args:
         user_id (str): The user ID to validate
@@ -134,26 +105,18 @@ def authorize(user_id: str, session_id: str) -> None:
         AuthorizationError: If authorization fails
     """
     try:
-        if not session_id:
-            raise AuthorizationError("No session ID provided")
-            
-        # Query the Sessions table
-        response = sessions_table.get_item(
-            Key={'session_id': session_id}
-        )
+        # Invoke the authorize Lambda function
+        response = invoke('Authorize', {
+            'user_id': user_id,
+            'session_id': session_id
+        })
         
-        session = response.get('Item')
-        if not session:
-            logger.warning(f"Session not found: {session_id}")
-            raise AuthorizationError("ACS: Unauthorized")
+        # Check if authorization was successful
+        if response['statusCode'] != 200 or not response['body'].get('authorized', False):
+            raise AuthorizationError(response['body'].get('message', 'ACS: Unauthorized'))
             
-        # Validate user_id matches session
-        if session.get('associated_account') != user_id:
-            logger.warning(f"User ID mismatch: {user_id} != {session.get('associated_account')}")
-            raise AuthorizationError("ACS: Unauthorized")
-                            
     except ClientError as e:
-        logger.error(f"DynamoDB error during authorization: {str(e)}")
+        logger.error(f"Lambda invocation error during authorization: {str(e)}")
         raise AuthorizationError("ACS: Unauthorized")
     except Exception as e:
         logger.error(f"Unexpected error during authorization: {str(e)}")
