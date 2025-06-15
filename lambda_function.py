@@ -147,7 +147,7 @@ def lambda_handler(event, context):
         
     # Check rate limit using the rate-limit Lambda
     try:
-        rate_limit_response = invoke('rate-limit-aws', {
+        rate_limit_response = invoke('RateLimitAWS', {
             'client_id': account_id,
             'session': session_id
         })
