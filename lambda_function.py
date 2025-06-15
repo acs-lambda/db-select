@@ -216,11 +216,18 @@ def lambda_handler(event, context):
     try:
         # Check if associated_account is part of the index name (indicating it's a GSI)
         if 'associated_account' in index_name.lower():
-            logger.debug(f"Using associated_account as partition key in KeyConditionExpression")
+            logger.debug(f"Using associated_account as partition key in KeyConditionExpression and filtering for key_name")
+            # Query by associated_account and then filter results for key_name match
             response = table.query(
                 IndexName=index_name,
-                KeyConditionExpression=Key('associated_account').eq(account_id) & Key(key_name).eq(key_value)
+                KeyConditionExpression=Key('associated_account').eq(account_id)
             )
+            # Filter the items to match key_name and key_value
+            items = [
+                item for item in response.get('Items', [])
+                if item.get(key_name) == key_value
+            ]
+            logger.info(f"Query successful. Retrieved {len(items)} items after filtering")
         else:
             logger.debug(f"Using associated_account in FilterExpression")
             response = table.query(
@@ -231,9 +238,9 @@ def lambda_handler(event, context):
                     ':account_id': account_id
                 }
             )
+            items = response.get('Items', [])
+            logger.info(f"Query successful. Retrieved {len(items)} items")
             
-        items = response.get('Items', [])
-        logger.info(f"Query successful. Retrieved {len(items)} items")
         logger.debug(f"Query response: {safe_json_dumps(items)}")
         
         return {
