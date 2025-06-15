@@ -148,8 +148,8 @@ def authorize(user_id: str, session_id: str) -> None:
             raise AuthorizationError("ACS: Unauthorized")
             
         # Validate user_id matches session
-        if session.get('user_id') != user_id:
-            logger.warning(f"User ID mismatch: {user_id} != {session.get('user_id')}")
+        if session.get('associated_account') != user_id:
+            logger.warning(f"User ID mismatch: {user_id} != {session.get('associated_account')}")
             raise AuthorizationError("ACS: Unauthorized")
                             
     except ClientError as e:
