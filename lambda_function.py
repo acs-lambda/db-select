@@ -110,6 +110,8 @@ def lambda_handler(event, context):
             'headers': cors_headers,
             'body': safe_json_dumps({'error': 'Invalid request format'})
         }
+    
+    print(parsed_event)
 
     # Validate required parameters
     table_name = parsed_event.get('table_name')
