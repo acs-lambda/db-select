@@ -1,10 +1,53 @@
+"""
+Database Select Lambda Function
+==============================
+
+This Lambda function provides secure access to DynamoDB records with account-based filtering.
+It ensures that users can only access records that have their account_id as the associated_account.
+
+API Interface
+------------
+Endpoint: POST /db-select
+Authentication: Required (account_id and session)
+
+Request Payload:
+{
+    "table_name": string,      # Required: Name of the DynamoDB table to query
+    "index_name": string,      # Required: Name of the GSI to use for querying
+    "key_name": string,        # Required: Name of the key attribute to query on
+    "key_value": string,       # Required: Value to match against key_name
+    "account_id": string,      # Required: ID of the authenticated user
+    "session": string          # Required: Session token for authentication
+}
+
+Response:
+{
+    "statusCode": number,      # HTTP status code
+    "headers": object,         # CORS headers
+    "body": string            # JSON stringified response body
+}
+
+Status Codes:
+- 200: Success - Records retrieved successfully
+- 400: Bad Request - Missing required parameters or invalid request format
+- 401: Unauthorized - Invalid or expired session
+- 429: Too Many Requests - Rate limit exceeded
+- 500: Internal Server Error - DynamoDB query failed or rate limit check failed
+
+Security:
+- All requests must include valid account_id and session
+- Records are filtered to only return those where associated_account matches account_id
+- Rate limiting is enforced per account
+- CORS headers are automatically applied
+"""
+
 import os
 import json
 import boto3
 import logging
-import time
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
+from utils import invoke, parse_event, authorize, AuthorizationError
 
 # Configure logging
 logger = logging.getLogger()
@@ -22,8 +65,7 @@ def safe_json_dumps(obj):
     return json.dumps(obj, cls=DecimalEncoder)
 
 # reuse clients
-dynamodb      = boto3.resource('dynamodb')
-lambda_client = boto3.client('lambda')
+dynamodb = boto3.resource('dynamodb')
 
 def fetch_cors_headers():
     """
@@ -35,93 +77,13 @@ def fetch_cors_headers():
 
     try:
         logger.debug("Invoking CORS Lambda function")
-        resp = lambda_client.invoke(
-            FunctionName=fn,
-            InvocationType='RequestResponse',
-            Payload=json.dumps({}).encode('utf-8')
-        )
-        # read and parse its JSON response
-        payload = resp['Payload'].read().decode('utf-8')
-        result  = json.loads(payload)
-        headers = result.get('headers', {})
+        resp = invoke(fn, {})
+        headers = resp.get('headers', {})
         logger.info("Successfully retrieved CORS headers")
         return headers
     except Exception as e:
         logger.error(f"Failed to fetch CORS headers: {str(e)}", exc_info=True)
         return {}
-
-def check_rate_limit(account_id):
-    """
-    Check if the account has exceeded their AWS API rate limit.
-    Returns (account_exists, is_rate_limited, current_invocations, rate_limit)
-    """
-    try:
-        # First check the user's rate limit from Users table
-        users_table = dynamodb.Table('Users')
-        user_response = users_table.get_item(
-            Key={'id': account_id}
-        )
-        user_item = user_response.get('Item')
-        
-        # If account doesn't exist, return early
-        if not user_item:
-            logger.warning(f"Account {account_id} not found in Users table")
-            return False, False, 0, 0
-            
-        rate_limit = user_item.get('rl_aws', 0)  # Default to 0 if not set
-        
-        # Check current invocations in RL_AWS table
-        rl_table = dynamodb.Table('RL_AWS')
-        try:
-            rl_response = rl_table.get_item(
-                Key={'associated_account': account_id}
-            )
-            current_invocations = rl_response.get('Item', {}).get('invocations', 0)
-        except Exception:
-            current_invocations = 0
-            
-        return True, current_invocations >= rate_limit, current_invocations, rate_limit
-    except Exception as e:
-        logger.error(f"Error checking rate limit: {str(e)}", exc_info=True)
-        return False, False, 0, 0
-
-def update_rate_limit(account_id):
-    """
-    Update the rate limit counter for the account.
-    Creates new record with TTL if doesn't exist.
-    """
-    try:
-        rl_table = dynamodb.Table('RL_AWS')
-        current_time = int(time.time())  # Current time in seconds
-        ttl_time = current_time + 60  # 1 minute from now
-        
-        # Try to update existing record
-        try:
-            response = rl_table.update_item(
-                Key={'associated_account': account_id},
-                UpdateExpression='SET invocations = invocations + :inc, #ttl = :ttl',
-                ExpressionAttributeValues={
-                    ':inc': 1,
-                    ':ttl': ttl_time
-                },
-                ExpressionAttributeNames={
-                    '#ttl': 'ttl'
-                },
-                ReturnValues='UPDATED_NEW'
-            )
-        except (rl_table.meta.client.exceptions.ResourceNotFoundException,
-                rl_table.meta.client.exceptions.ValidationException) as e:
-            # Create new record if doesn't exist or if item is invalid
-            logger.info(f"Creating new rate limit record for account {account_id} due to: {str(e)}")
-            rl_table.put_item(
-                Item={
-                    'associated_account': account_id,
-                    'invocations': 1,
-                    'ttl': ttl_time
-                }
-            )
-    except Exception as e:
-        logger.error(f"Error updating rate limit: {str(e)}", exc_info=True)
 
 def lambda_handler(event, context):
     logger.info("Lambda function started")
@@ -138,50 +100,97 @@ def lambda_handler(event, context):
             'headers': cors_headers
         }
 
-    # parse body (API Gateway proxy vs direct invoke)
-    body = event.get('body')
-    if body:
-        logger.debug("Attempting to parse request body")
-        try:
-            payload = json.loads(body)
-            logger.info("Successfully parsed request body")
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON body: {str(e)}")
-            return {
-                'statusCode': 400,
-                'headers': cors_headers,
-                'body': safe_json_dumps({'error': 'Invalid JSON in body'})
-            }
-    else:
-        logger.info("No body found, using event as payload")
-        payload = event
-    
-    logger.debug(f"Processed payload: {safe_json_dumps(payload)}")
+    # Parse the event (handles both API Gateway and direct Lambda)
+    try:
+        parsed_event = parse_event(event)
+    except Exception as e:
+        logger.error(f"Error parsing event: {str(e)}")
+        return {
+            'statusCode': 400,
+            'headers': cors_headers,
+            'body': safe_json_dumps({'error': 'Invalid request format'})
+        }
 
     # Validate required parameters
-    table_name = payload.get('table_name')
-    index_name = payload.get('index_name')
-    key_name   = payload.get('key_name')
-    key_value  = payload.get('key_value')
-    # Get account ID from the request
-    account_id = payload.get('account_id')
-    if not account_id:
-        logger.warning("No account ID found in request")
-    else:
-    # Check rate limit
-        account_exists, is_rate_limited, current_invocations, rate_limit = check_rate_limit(account_id)
-    
-        if is_rate_limited:
-            logger.warning(f"Rate limit exceeded for account {account_id}. Current: {current_invocations}, Limit: {rate_limit}")
+    table_name = parsed_event.get('table_name')
+    index_name = parsed_event.get('index_name')
+    key_name = parsed_event.get('key_name')
+    key_value = parsed_event.get('key_value')
+    account_id = parsed_event.get('account_id')
+    session_id = parsed_event.get('session')
+
+    if not account_id or not session_id:
+        logger.warning("Missing account_id or session in request")
+        return {
+            'statusCode': 400,
+            'headers': cors_headers,
+            'body': safe_json_dumps({
+                'error': 'Missing required fields: account_id and session'
+            })
+        }
+        
+    logger.info("Authorizing request")
+    try:
+        authorize(account_id, session_id)
+    except AuthorizationError as e:
+        logger.error(f"Authorization error: {str(e)}")
+        return {
+            'statusCode': 401,
+            'headers': cors_headers,
+            'body': safe_json_dumps({
+                'error': 'Unauthorized',
+                'message': 'Invalid or expired session'
+            })
+        }
+        
+    # Check rate limit using the rate-limit Lambda
+    try:
+        rate_limit_response = invoke('rate-limit-aws', {
+            'client_id': account_id,
+            'session': session_id
+        })
+        
+        if rate_limit_response.get('statusCode') == 429:
+            logger.warning(f"Rate limit exceeded for account {account_id}")
             return {
                 'statusCode': 429,
                 'headers': cors_headers,
                 'body': safe_json_dumps({
                     'error': 'Rate limit exceeded',
-                    'message': f'You have exceeded your AWS API rate limit of {rate_limit} requests per minute. Please try again later.'
+                    'message': 'You have exceeded your AWS API rate limit. Please try again later.'
                 })
             }
-        
+        elif rate_limit_response.get('statusCode') == 401:
+            logger.warning(f"Unauthorized request for account {account_id}")
+            return {
+                'statusCode': 401,
+                'headers': cors_headers,
+                'body': safe_json_dumps({
+                    'error': 'Unauthorized',
+                    'message': 'Invalid or expired session'
+                })
+            }
+        elif rate_limit_response.get('statusCode') != 200:
+            logger.error(f"Rate limit check failed: {rate_limit_response}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': safe_json_dumps({
+                    'error': 'Rate limit check failed',
+                    'message': 'An error occurred while checking rate limits'
+                })
+            }
+    except Exception as e:
+        logger.error(f"Error checking rate limit: {str(e)}")
+        return {
+            'statusCode': 500,
+            'headers': cors_headers,
+            'body': safe_json_dumps({
+                'error': 'Rate limit check failed',
+                'message': 'An error occurred while checking rate limits'
+            })
+        }
+
     logger.info(f"Validating parameters - Table: {table_name}, Index: {index_name}, Key: {key_name}")
     
     if not all([table_name, index_name, key_name, key_value]):
@@ -206,14 +215,15 @@ def lambda_handler(event, context):
         logger.debug(f"Executing query with key condition: {key_name} = {key_value}")
         response = table.query(
             IndexName=index_name,
-            KeyConditionExpression=Key(key_name).eq(key_value)
+            KeyConditionExpression=Key(key_name).eq(key_value),
+            FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
+            ExpressionAttributeValues={
+                ':account_id': account_id
+            }
         )
         items = response.get('Items', [])
         logger.info(f"Query successful. Retrieved {len(items)} items")
         logger.debug(f"Query response: {safe_json_dumps(items)}")
-        
-        # Update rate limit counter after successful execution
-        update_rate_limit(account_id)
         
         return {
             'statusCode': 200,
