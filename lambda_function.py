@@ -119,7 +119,7 @@ def lambda_handler(event, context):
     key_name = parsed_event.get('key_name')
     key_value = parsed_event.get('key_value')
     account_id = parsed_event.get('account_id')
-    session_id = parsed_event.get('session')
+    session_id = parsed_event.get('session_id')
 
     if not account_id or not session_id:
         logger.warning("Missing account_id or session in request")
