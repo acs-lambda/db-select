@@ -169,7 +169,44 @@ def lambda_handler(event, context):
         
     logger.info("Authorizing request")
     try:
-        authorize(account_id, session_id)
+        if session_id != AUTH_BP:
+            authorize(account_id, session_id)
+            # Check rate limit using the rate-limit Lambda
+            rate_limit_response = invoke_lambda('RateLimitAWS', {
+                'client_id': account_id,
+                'session': session_id
+            })
+            
+            if rate_limit_response.get('statusCode') == 429:
+                logger.warning(f"Rate limit exceeded for account {account_id}")
+                return {
+                    'statusCode': 429,
+                    'headers': cors_headers,
+                    'body': safe_json_dumps({
+                        'error': 'Rate limit exceeded',
+                        'message': 'You have exceeded your AWS API rate limit. Please try again later.'
+                    })
+                }
+            elif rate_limit_response.get('statusCode') == 401:
+                logger.warning(f"Unauthorized request for account {account_id}")
+                return {
+                    'statusCode': 401,
+                    'headers': cors_headers,
+                    'body': safe_json_dumps({
+                        'error': 'Unauthorized',
+                        'message': 'Invalid or expired session'
+                    })
+                }
+            elif rate_limit_response.get('statusCode') != 200:
+                logger.error(f"Rate limit check failed: {rate_limit_response}")
+                return {
+                    'statusCode': 500,
+                    'headers': cors_headers,
+                    'body': safe_json_dumps({
+                        'error': 'Rate limit check failed',
+                        'message': 'An error occurred while checking rate limits'
+                    })
+                }
     except AuthorizationError as e:
         logger.error(f"Authorization error: {str(e)}")
         return {
@@ -180,52 +217,14 @@ def lambda_handler(event, context):
                 'message': 'Invalid or expired session'
             })
         }
-        
-    # Check rate limit using the rate-limit Lambda
-    try:
-        rate_limit_response = invoke_lambda('RateLimitAWS', {
-            'client_id': account_id,
-            'session': session_id
-        })
-        
-        if rate_limit_response.get('statusCode') == 429:
-            logger.warning(f"Rate limit exceeded for account {account_id}")
-            return {
-                'statusCode': 429,
-                'headers': cors_headers,
-                'body': safe_json_dumps({
-                    'error': 'Rate limit exceeded',
-                    'message': 'You have exceeded your AWS API rate limit. Please try again later.'
-                })
-            }
-        elif rate_limit_response.get('statusCode') == 401:
-            logger.warning(f"Unauthorized request for account {account_id}")
-            return {
-                'statusCode': 401,
-                'headers': cors_headers,
-                'body': safe_json_dumps({
-                    'error': 'Unauthorized',
-                    'message': 'Invalid or expired session'
-                })
-            }
-        elif rate_limit_response.get('statusCode') != 200:
-            logger.error(f"Rate limit check failed: {rate_limit_response}")
-            return {
-                'statusCode': 500,
-                'headers': cors_headers,
-                'body': safe_json_dumps({
-                    'error': 'Rate limit check failed',
-                    'message': 'An error occurred while checking rate limits'
-                })
-            }
     except Exception as e:
-        logger.error(f"Error checking rate limit: {str(e)}")
+        logger.error(f"Error during authorization or rate limit check: {str(e)}")
         return {
             'statusCode': 500,
             'headers': cors_headers,
             'body': safe_json_dumps({
-                'error': 'Rate limit check failed',
-                'message': 'An error occurred while checking rate limits'
+                'error': 'Authorization check failed',
+                'message': 'An error occurred during authorization'
             })
         }
 
