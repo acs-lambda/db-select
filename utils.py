@@ -77,7 +77,7 @@ def invoke_lambda(function_name, payload, invocation_type="RequestResponse"):
         raise LambdaError(500, f"An unexpected error occurred invoking {function_name}: {e}")
 
 def parse_event(event):
-    response = invoke_lambda('parse-event', event)
+    response = invoke_lambda('ParseEvent', event)
     return json.loads(response.get('body', '{}'))
 
 def authorize(user_id, session_id):

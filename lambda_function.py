@@ -47,7 +47,7 @@ import boto3
 import logging
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
-from utils import invoke, parse_event, authorize, AuthorizationError, create_response, LambdaError, invoke_lambda
+from utils import invoke_lambda, parse_event, authorize, AuthorizationError, create_response, LambdaError
 
 # Configure logging
 logger = logging.getLogger()
@@ -78,7 +78,7 @@ def fetch_cors_headers():
 
     try:
         logger.debug("Invoking CORS Lambda function")
-        resp = invoke(fn, {})
+        resp = invoke_lambda(fn, {})
         headers = resp.get('headers', {})
         logger.info("Successfully retrieved CORS headers")
         return headers
