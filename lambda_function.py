@@ -51,6 +51,7 @@ from utils import invoke, parse_event, authorize, AuthorizationError
 
 # Configure logging
 logger = logging.getLogger()
+AUTH_BP = os.environ.get('AUTH_BP', '')
 logger.setLevel(logging.INFO)
 
 # Custom JSON encoder to handle Decimal types
@@ -230,14 +231,21 @@ def lambda_handler(event, context):
             logger.info(f"Query successful. Retrieved {len(items)} items after filtering")
         else:
             logger.debug(f"Using associated_account in FilterExpression")
-            response = table.query(
-                IndexName=index_name,
-                KeyConditionExpression=Key(key_name).eq(key_value),
-                FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
-                ExpressionAttributeValues={
-                    ':account_id': account_id
-                }
-            )
+            # If authbp matches, do not check for associated_account
+            if session_id == AUTH_BP:
+                response = table.query(
+                    IndexName=index_name,
+                    KeyConditionExpression=Key(key_name).eq(key_value)
+                )
+            else:
+                response = table.query(
+                    IndexName=index_name,
+                    KeyConditionExpression=Key(key_name).eq(key_value),
+                    FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
+                    ExpressionAttributeValues={
+                        ':account_id': account_id
+                    }
+                )
             items = response.get('Items', [])
             logger.info(f"Query successful. Retrieved {len(items)} items")
             
