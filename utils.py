@@ -83,7 +83,7 @@ def parse_event(event):
 def authorize(user_id, session_id):
     payload = {'user_id': user_id, 'session_id': session_id}
     try:
-        response = invoke_lambda('authorize', payload)
+        response = invoke_lambda('Authorize', payload)
         body = json.loads(response.get('body', '{}'))
         if not body.get('authorized'):
              raise AuthorizationError(body.get('message', 'Unauthorized'))
