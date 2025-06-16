@@ -47,7 +47,7 @@ import boto3
 import logging
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
-from utils import invoke, parse_event, authorize, AuthorizationError
+from utils import invoke, parse_event, authorize, AuthorizationError, create_response, LambdaError, invoke_lambda
 
 # Configure logging
 logger = logging.getLogger()
@@ -85,6 +85,41 @@ def fetch_cors_headers():
     except Exception as e:
         logger.error(f"Failed to fetch CORS headers: {str(e)}", exc_info=True)
         return {}
+
+def select_db_items(table_name, index_name, key_name, key_value, account_id, session_id):
+    """
+    Selects items from DynamoDB based on a key, and filters by account ID.
+    """
+    table = dynamodb.Table(table_name)
+    
+    try:
+        if 'associated_account' in index_name.lower():
+            response = table.query(
+                IndexName=index_name,
+                KeyConditionExpression=Key('associated_account').eq(account_id)
+            )
+            items = [item for item in response.get('Items', []) if item.get(key_name) == key_value]
+        else:
+            if session_id == AUTH_BP:
+                response = table.query(
+                    IndexName=index_name,
+                    KeyConditionExpression=Key(key_name).eq(key_value)
+                )
+            else:
+                response = table.query(
+                    IndexName=index_name,
+                    KeyConditionExpression=Key(key_name).eq(key_value),
+                    FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
+                    ExpressionAttributeValues={':account_id': account_id}
+                )
+            items = response.get('Items', [])
+        
+        logger.info(f"Query successful. Retrieved {len(items)} items.")
+        return items
+
+    except Exception as e:
+        logger.error(f"DynamoDB error during select: {e}")
+        raise LambdaError(500, f"A database error occurred: {e}")
 
 def lambda_handler(event, context):
     logger.info("Lambda function started")
@@ -148,7 +183,7 @@ def lambda_handler(event, context):
         
     # Check rate limit using the rate-limit Lambda
     try:
-        rate_limit_response = invoke('RateLimitAWS', {
+        rate_limit_response = invoke_lambda('RateLimitAWS', {
             'client_id': account_id,
             'session': session_id
         })
@@ -213,43 +248,15 @@ def lambda_handler(event, context):
         }
 
     logger.info(f"Querying DynamoDB table {table_name} using index {index_name}")
-    table = dynamodb.Table(table_name)
     try:
-        # Check if associated_account is part of the index name (indicating it's a GSI)
-        if 'associated_account' in index_name.lower():
-            logger.debug(f"Using associated_account as partition key in KeyConditionExpression and filtering for key_name")
-            # Query by associated_account and then filter results for key_name match
-            response = table.query(
-                IndexName=index_name,
-                KeyConditionExpression=Key('associated_account').eq(account_id)
-            )
-            # Filter the items to match key_name and key_value
-            items = [
-                item for item in response.get('Items', [])
-                if item.get(key_name) == key_value
-            ]
-            logger.info(f"Query successful. Retrieved {len(items)} items after filtering")
-        else:
-            logger.debug(f"Using associated_account in FilterExpression")
-            # If authbp matches, do not check for associated_account
-            if session_id == AUTH_BP:
-                response = table.query(
-                    IndexName=index_name,
-                    KeyConditionExpression=Key(key_name).eq(key_value)
-                )
-            else:
-                response = table.query(
-                    IndexName=index_name,
-                    KeyConditionExpression=Key(key_name).eq(key_value),
-                    FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
-                    ExpressionAttributeValues={
-                        ':account_id': account_id
-                    }
-                )
-            items = response.get('Items', [])
-            logger.info(f"Query successful. Retrieved {len(items)} items")
-            
-        logger.debug(f"Query response: {safe_json_dumps(items)}")
+        items = select_db_items(
+            table_name,
+            index_name,
+            key_name,
+            key_value,
+            account_id,
+            session_id
+        )
         
         return {
             'statusCode': 200,
