@@ -88,31 +88,16 @@ def fetch_cors_headers():
 
 def select_db_items(table_name, index_name, key_name, key_value, account_id, session_id):
     """
-    Selects items from DynamoDB based on a key, and filters by account ID.
+    Selects items from DynamoDB based on a key using the specified index.
     """
     table = dynamodb.Table(table_name)
     
     try:
-        if 'associated_account' in index_name.lower():
-            response = table.query(
-                IndexName=index_name,
-                KeyConditionExpression=Key('associated_account').eq(account_id)
-            )
-            items = [item for item in response.get('Items', []) if item.get(key_name) == key_value]
-        else:
-            if session_id == AUTH_BP:
-                response = table.query(
-                    IndexName=index_name,
-                    KeyConditionExpression=Key(key_name).eq(key_value)
-                )
-            else:
-                response = table.query(
-                    IndexName=index_name,
-                    KeyConditionExpression=Key(key_name).eq(key_value),
-                    FilterExpression='attribute_exists(associated_account) AND associated_account = :account_id',
-                    ExpressionAttributeValues={':account_id': account_id}
-                )
-            items = response.get('Items', [])
+        response = table.query(
+            IndexName=index_name,
+            KeyConditionExpression=Key(key_name).eq(key_value)
+        )
+        items = response.get('Items', [])
         
         logger.info(f"Query successful. Retrieved {len(items)} items.")
         return items
